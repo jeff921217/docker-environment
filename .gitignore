@@ -47,4 +47,5 @@ tmp/
 *.zip
 
 # markdown
-*.md~
+problem.md
+Lab1.md
