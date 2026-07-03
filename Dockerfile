@@ -76,3 +76,46 @@ USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
 CMD ["/bin/bash"]
+
+
+# 第三個 stage，verilator_provider，安裝 Verilator。
+FROM common_pkg_provider AS verilator_provider
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG USERNAME=developer
+
+# 固定 Verilator 版本
+ARG VERILATOR_VERSION=v5.032
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        autoconf \
+        bison \
+        flex \
+        help2man \
+        perl \
+        libfl-dev \
+        zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/build
+
+# 用 git clone 下載 Verilator 原始碼，並編譯安裝到 /opt/verilator/${VERILATOR_VERSION}，最後建立 /opt/verilator/current 的符號連結。
+RUN git clone --depth 1 --branch ${VERILATOR_VERSION} https://github.com/verilator/verilator.git && \
+    cd verilator && \
+    autoconf && \
+    ./configure --prefix=/opt/verilator/${VERILATOR_VERSION} && \
+    make -j"$(nproc)" && \
+    make install && \
+    ln -sfn /opt/verilator/${VERILATOR_VERSION} /opt/verilator/current && \
+    rm -rf /tmp/build
+
+ENV VERILATOR_HOME=/opt/verilator/current
+ENV PATH="${VERILATOR_HOME}/bin:${PATH}"
+
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}
+
+CMD ["/bin/bash"]
