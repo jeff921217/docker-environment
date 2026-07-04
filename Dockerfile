@@ -165,3 +165,29 @@ USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
 CMD ["/bin/bash"]
+
+
+# 最終輸出的 stage
+FROM common_pkg_provider AS release
+
+ARG USERNAME=developer
+
+USER root
+
+# 將上面各別建立與 compile 的 stage 複製一份到我們最終的 release stage 中使用
+COPY --from=verilator_provider /opt/verilator /opt/verilator
+COPY --from=systemc_provider /opt/systemc /opt/systemc
+
+ENV VERILATOR_HOME=/opt/verilator/current
+ENV SYSTEMC_HOME=/opt/systemc/current
+ENV SYSTEMC_CXXFLAGS="-I/opt/systemc/current/include"
+ENV SYSTEMC_LDFLAGS="-L/opt/systemc/current/lib -Wl,-rpath,/opt/systemc/current/lib -lsystemc"
+ENV LD_LIBRARY_PATH="/opt/systemc/current/lib"
+ENV PATH="${VERILATOR_HOME}/bin:${PATH}"
+
+RUN chown -R ${USERNAME}:${USERNAME} /opt/verilator /opt/systemc
+
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}
+
+CMD ["/bin/bash"]
