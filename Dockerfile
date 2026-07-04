@@ -119,3 +119,49 @@ USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
 CMD ["/bin/bash"]
+
+
+# 下一個 Stage：systemc_provider => Build SystemC from Source
+# 從 Accellera 官方 GitHub 下載 2.3.4 並 configure / 安裝
+FROM common_pkg_provider AS systemc_provider
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG USERNAME=developer
+ARG SYSTEMC_VERSION=2.3.4
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        cmake && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/build
+
+RUN git clone --depth 1 --branch ${SYSTEMC_VERSION} https://github.com/accellera-official/systemc.git && \
+    cmake -S systemc -B systemc-build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        -DCMAKE_INSTALL_PREFIX=/opt/systemc/${SYSTEMC_VERSION} && \
+    cmake --build systemc-build --parallel "$(nproc)" && \
+    cmake --install systemc-build && \
+    if [ ! -d /opt/systemc/${SYSTEMC_VERSION}/lib ]; then \
+        if [ -d /opt/systemc/${SYSTEMC_VERSION}/lib-linux64 ]; then \
+            ln -sfn lib-linux64 /opt/systemc/${SYSTEMC_VERSION}/lib; \
+        elif [ -d /opt/systemc/${SYSTEMC_VERSION}/lib-linux ]; then \
+            ln -sfn lib-linux /opt/systemc/${SYSTEMC_VERSION}/lib; \
+        fi; \
+    fi && \
+    ln -sfn /opt/systemc/${SYSTEMC_VERSION} /opt/systemc/current && \
+    rm -rf /tmp/build
+
+ENV SYSTEMC_HOME=/opt/systemc/current
+ENV SYSTEMC_CXXFLAGS="-I/opt/systemc/current/include"
+ENV SYSTEMC_LDFLAGS="-L/opt/systemc/current/lib -Wl,-rpath,/opt/systemc/current/lib -lsystemc"
+ENV LD_LIBRARY_PATH="/opt/systemc/current/lib"
+
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}
+
+CMD ["/bin/bash"]
