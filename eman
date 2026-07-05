@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+
+# Environment MANager: 用來在 container 內快速檢查 Lab1 環境。
+# set -e：任何指令失敗就停止，避免錯誤繼續往下跑。
+# set -u：使用未定義變數時直接報錯。
+# set -o pipefail：pipeline 中只要有一段失敗，整條 pipeline 就算失敗。
+set -euo pipefail
+
+# AOC Lab0 Tutorial repo 是講義指定的測試範例來源。
+AOC_LAB0_REPO_URL="ssh://git@gitlab.aislab.ee.ncku.edu.tw:3175/aislab-internal/course/aoc/aoc2026/lab-0-tutorial.git"
+
+# WORK_ROOT 是 eman 產生暫存測試檔案的地方。
+# 使用者可以用 EMAN_WORKDIR 覆蓋，沒指定就放在 /tmp。
+WORK_ROOT="${EMAN_WORKDIR:-/tmp/eman-examples}"
+
+# 如果使用者有設定 AOC_LAB0_REPO，就優先使用那個 repo。
+# 沒設定的話，後面會自動尋找常見路徑，找不到才 clone。
+LAB0_REPO_DIR="${AOC_LAB0_REPO:-}"
+
+# 取第一個參數當作 subcommand，例如 c-compiler-example。
+# 如果沒有輸入參數，預設顯示 help。
+COMMAND="${1:-help}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+show_help() {
+    # 顯示 eman 支援的指令和可用的環境變數。
+    cat <<EOF
+Usage:
+  eman <command>
+
+Commands:
+  help                         Show this help message
+  check-verilator              Print Verilator version and path
+  verilator                    Alias of check-verilator
+  verilator-example            Compile and run lab-0-tutorial/verilog/counter
+  change-verilator <VERSION>   Switch to another installed Verilator version.
+                               If the version is not installed, build it from source.
+  c-compiler-version           Print gcc, g++, and GNU Make versions
+  c-compiler                   Alias of c-compiler-version
+  c-compiler-example           Compile and run lab-0-tutorial/c_cpp/arrays/multidim_array
+
+Environment:
+  AOC_LAB0_REPO                Existing lab-0-tutorial repo path.
+                               If not set, eman searches ./lab-0-tutorial
+                               and /workspace/lab-0-tutorial first, then
+                               clones to ${WORK_ROOT}/lab-0-tutorial.
+
+EOF
+}
+
+require_command() {
+    # 檢查必要指令是否存在，例如 gcc / make / verilator。
+    # command -v 找不到時就印錯誤並停止。
+    if ! command -v "$1" > /dev/null 2>&1; then
+        echo "Required command not found: $1"
+        exit 1
+    fi
+}
+
+normalize_verilator_version() {
+    # 使用者可能輸入 5.032 或 v5.032。
+    # Verilator 的 git tag 使用 v5.032，所以這裡統一補上 v。
+    version="$1"
+    if [[ "${version}" != v* ]]; then
+        version="v${version}"
+    fi
+    echo "${version}"
+}
+
+prepare_lab0_repo() {
+    # 準備 Lab0 Tutorial repo。
+    # 流程是：先找現有 repo；如果找不到，就 clone 一份到暫存目錄。
+    require_command git
+    choose_lab0_repo
+
+    if [ -d "${LAB0_REPO_DIR}/.git" ]; then
+        echo "Using lab-0-tutorial repo: ${LAB0_REPO_DIR}"
+        return 0
+    fi
+
+    if [ -e "${LAB0_REPO_DIR}" ]; then
+        echo "AOC_LAB0_REPO exists but is not a git repo: ${LAB0_REPO_DIR}"
+        exit 1
+    fi
+
+    echo "Cloning lab-0-tutorial repo to ${LAB0_REPO_DIR}"
+    mkdir -p "$(dirname "${LAB0_REPO_DIR}")"
+    git clone --depth 1 "${AOC_LAB0_REPO_URL}" "${LAB0_REPO_DIR}"
+}
+
+choose_lab0_repo() {
+    # 決定要使用哪一份 lab-0-tutorial repo。
+    # 優先順序：
+    # 1. 使用者設定的 AOC_LAB0_REPO
+    # 2. 當前目錄底下的 lab-0-tutorial
+    # 3. docker mount 進來的 /workspace/lab-0-tutorial
+    # 4. 都沒有的話，就指定到 /tmp，讓 prepare_lab0_repo 去 clone。
+    if [ -n "${LAB0_REPO_DIR}" ]; then
+        return 0
+    fi
+
+    for candidate in \
+        "${PWD}/lab-0-tutorial" \
+        "${PWD}/aoc-lab0-tutorial" \
+        "/workspace/lab-0-tutorial" \
+        "/workspace/aoc-lab0-tutorial"; do
+        if [ -d "${candidate}/.git" ]; then
+            LAB0_REPO_DIR="${candidate}"
+            return 0
+        fi
+    done
+
+    LAB0_REPO_DIR="${WORK_ROOT}/lab-0-tutorial"
+}
+
+copy_example_dir() {
+    # 把 Lab0 repo 裡的範例複製到 /tmp 再測試。
+    # 這樣 make clean / 編譯輸出不會污染原本 clone 下來的 repo。
+    source_dir="$1"
+    target_dir="$2"
+
+    if [ ! -d "${source_dir}" ]; then
+        echo "Example directory not found: ${source_dir}"
+        exit 1
+    fi
+
+    rm -rf "${target_dir}"
+    mkdir -p "$(dirname "${target_dir}")"
+    cp -a "${source_dir}" "${target_dir}"
+}
+
+c_compiler_version() {
+    # 印出 C/C++ compiler 和 make 版本，用來確認基本編譯工具存在。
+    require_command gcc
+    require_command g++
+    require_command make
+
+    echo "gcc:  $(gcc --version | head -n 1)"
+    echo "g++:  $(g++ --version | head -n 1)"
+    echo "make: $(make --version | head -n 1)"
+}
+
+c_compiler_example() {
+    # 使用 Lab0 repo 的 multidim_array 範例測試 gcc 和 make。
+    # make all 會編譯 main.c，並依照該 Makefile 執行程式。
+    require_command gcc
+    require_command make
+    prepare_lab0_repo
+
+    source_dir="${LAB0_REPO_DIR}/c_cpp/arrays/multidim_array"
+    example_dir="${WORK_ROOT}/c-compiler-example"
+
+    copy_example_dir "${source_dir}" "${example_dir}"
+
+    echo "Running C compiler example in ${example_dir}"
+    make -C "${example_dir}" clean all
+}
+
+check_verilator() {
+    # 印出目前 PATH 找到的 Verilator 版本和實際路徑。
+    require_command verilator
+
+    echo "verilator: $(verilator --version)"
+    echo "path:      $(command -v verilator)"
+}
+
+verilator_example() {
+    # 使用 Lab0 repo 的 counter 範例測試 Verilator。
+    # 這個範例會把 Counter.v 和 testbench.cc 編譯成 C++ simulation 再執行。
+    require_command verilator
+    require_command make
+    require_command g++
+    prepare_lab0_repo
+
+    source_dir="${LAB0_REPO_DIR}/verilog/counter"
+    example_dir="${WORK_ROOT}/verilator-example"
+
+    copy_example_dir "${source_dir}" "${example_dir}"
+
+    echo "Running Verilator example in ${example_dir}"
+    make -C "${example_dir}" clean all run
+}
+
+install_verilator_from_source() {
+    # 如果 change-verilator 指定的版本還不存在，就從官方 GitHub source build。
+    # 這個功能需要 sudo，所以預期在 Docker container 內執行。
+    version="$1"
+
+    if [ ! -f "/.dockerenv" ]; then
+        echo "change-verilator should be used inside the Docker container."
+        exit 1
+    fi
+
+    require_command sudo
+    require_command git
+    require_command make
+    require_command g++
+
+    echo "Installing Verilator ${version} from source."
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends \
+        autoconf \
+        bison \
+        flex \
+        help2man \
+        perl \
+        libfl-dev \
+        zlib1g-dev
+
+    # 用 mktemp 建立臨時 build directory，結束時用 trap 自動刪掉。
+    build_dir="$(mktemp -d)"
+    trap 'rm -rf "${build_dir}"' EXIT
+
+    # 只 clone 指定版本的 shallow copy，避免下載完整 git history。
+    git clone --depth 1 --branch "${version}" https://github.com/verilator/verilator.git "${build_dir}/verilator"
+    cd "${build_dir}/verilator"
+    autoconf
+    ./configure --prefix="/opt/verilator/${version}"
+    make -j"$(nproc)"
+    make install
+}
+
+change_verilator() {
+    # 切換 /opt/verilator/current 這個 symbolic link。
+    # 其他地方只看 current，因此換版本時不用改 PATH。
+    if [ "$#" -lt 1 ]; then
+        echo "Usage: eman change-verilator <VERSION>"
+        exit 1
+    fi
+
+    version="$(normalize_verilator_version "$1")"
+
+    if [ ! -x "/opt/verilator/${version}/bin/verilator" ]; then
+        install_verilator_from_source "${version}"
+    fi
+
+    # -s：建立 symbolic link
+    # -f：如果 current 已存在就覆蓋
+    # -n：如果 current 本身是 symlink，就替換 symlink，不跟進目錄
+    sudo ln -sfn "/opt/verilator/${version}" /opt/verilator/current
+
+    # 清掉 shell command lookup cache，避免切換後還抓到舊路徑。
+    hash -r
+
+    echo "Current Verilator:"
+    check_verilator
+}
+
+# 根據第一個參數決定要執行哪個功能。
+# 同一個功能可以提供 alias，例如 verilator 等同 check-verilator。
+case "${COMMAND}" in
+    help|-h|--help)
+        show_help
+        ;;
+    c-compiler|c-compiler-version)
+        c_compiler_version
+        ;;
+    c-compiler-example)
+        c_compiler_example
+        ;;
+    verilator|check-verilator)
+        check_verilator
+        ;;
+    verilator-example)
+        verilator_example
+        ;;
+    change-verilator)
+        change_verilator "$@"
+        ;;
+    *)
+        echo "Unknown command: ${COMMAND}"
+        show_help
+        exit 1
+        ;;
+esac
