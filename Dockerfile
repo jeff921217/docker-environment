@@ -73,9 +73,6 @@ RUN apt-get update && \
 
 # 套件裝完後切回 developer，避免 container 預設用 root
 USER ${USERNAME}
-WORKDIR /home/${USERNAME}
-
-CMD ["/bin/bash"]
 
 
 # 第三個 stage，verilator_provider，安裝 Verilator。
@@ -117,8 +114,6 @@ ENV PATH="${VERILATOR_HOME}/bin:${PATH}"
 
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
-
-CMD ["/bin/bash"]
 
 
 # 下一個 Stage：systemc_provider => Build SystemC from Source
@@ -164,8 +159,6 @@ ENV LD_LIBRARY_PATH="/opt/systemc/current/lib"
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
-CMD ["/bin/bash"]
-
 
 # 最終輸出的 stage
 FROM common_pkg_provider AS release
@@ -174,9 +167,14 @@ ARG USERNAME=developer
 
 USER root
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # 將上面各別建立與 compile 的 stage 複製一份到我們最終的 release stage 中使用
 COPY --from=verilator_provider /opt/verilator /opt/verilator
 COPY --from=systemc_provider /opt/systemc /opt/systemc
+COPY --chmod=0755 eman /usr/local/bin/eman
 
 ENV VERILATOR_HOME=/opt/verilator/current
 ENV SYSTEMC_HOME=/opt/systemc/current
@@ -188,6 +186,3 @@ ENV PATH="${VERILATOR_HOME}/bin:${PATH}"
 RUN chown -R ${USERNAME}:${USERNAME} /opt/verilator /opt/systemc
 
 USER ${USERNAME}
-WORKDIR /home/${USERNAME}
-
-CMD ["/bin/bash"]

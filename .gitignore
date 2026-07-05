@@ -41,6 +41,10 @@ docker-data/
 tmp/
 *.pid
 
+# Local cloned tutorial repos
+lab-0-tutorial/
+aoc-lab0-tutorial/
+
 # Archives
 *.tar
 *.tar.gz
